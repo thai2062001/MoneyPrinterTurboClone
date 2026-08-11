@@ -4089,32 +4089,32 @@ def _render_application():
         st.success(tr("Task Configuration Loaded"))
 
     with st.container(key="main_settings_grid"):
-        panel = st.columns(4)
-    left_panel = panel[0]
-    middle_panel = panel[1]
-    audio_panel = panel[2]
-    right_panel = panel[3]
+        left_panel, middle_panel, right_panel = st.columns([1.1, 1.3, 1.1])
 
     params = VideoParams(video_subject="")
     params.match_materials_to_script = bool(
         st.session_state.get("match_materials_to_script", False)
     )
+    
+    # Left column: Script and Audio settings
     _render_script_settings(left_panel, params)
-
-    uploaded_files = _render_video_settings(middle_panel, params)
     uploaded_audio_file, uploaded_bgm_file, voice_mode = _render_audio_settings(
-        audio_panel, params
+        left_panel, params
     )
 
+    # Right column: Video source and Subtitle settings
+    uploaded_files = _render_video_settings(right_panel, params)
     _render_subtitle_settings(right_panel, params)
 
-    generation_submitted = _render_generation_controls(
-        params,
-        uploaded_files,
-        uploaded_audio_file,
-        uploaded_bgm_file,
-        voice_mode,
-    )
+    # Middle column: Generation controls and progress / video list
+    with middle_panel:
+        generation_submitted = _render_generation_controls(
+            params,
+            uploaded_files,
+            uploaded_audio_file,
+            uploaded_bgm_file,
+            voice_mode,
+        )
 
     # 生成分支在启动后台线程前已经请求过保存。普通控件交互继续请求非阻塞保存；
     # 如果后台任务正在使用配置，配置层会在任务结束时自动应用并落盘最新值。
