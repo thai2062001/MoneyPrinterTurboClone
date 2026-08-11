@@ -127,6 +127,7 @@ _RUNTIME_CONFIG_SECTIONS = {
     "chatterbox": config.chatterbox,
     "elevenlabs": config.elevenlabs,
     "siliconflow": config.siliconflow,
+    "voicevox": config.voicevox,
     "ui": config.ui,
 }
 
