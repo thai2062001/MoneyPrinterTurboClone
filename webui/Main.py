@@ -3219,6 +3219,7 @@ def _render_audio_settings(panel, params):
                 ("mimo-tts", "Xiaomi MiMo TTS"),
                 ("elevenlabs", "ElevenLabs TTS"),
                 ("chatterbox", "Chatterbox TTS"),
+                ("voicevox", "VOICEVOX Local TTS"),
             ]
 
             tts_server_values = [server_value for server_value, _ in tts_servers]
@@ -3287,6 +3288,8 @@ def _render_audio_settings(panel, params):
                 # 自托管 Chatterbox 服务的预置音色（来自 [chatterbox] voices 配置）
                 _sync_chatterbox_config_from_session_state()
                 filtered_voices = voice.get_chatterbox_voices()
+            elif selected_tts_server == "voicevox":
+                filtered_voices = voice.get_voicevox_voices()
             else:
                 # 获取Azure的声音列表
                 all_voices = voice.get_all_azure_voices(filter_locals=None)
@@ -3311,6 +3314,11 @@ def _render_audio_settings(panel, params):
                 if voice.is_chatterbox_voice(v):
                     name = v.split(":", 1)[1] if ":" in v else v
                     return name.replace("-Female", "").replace("-Male", "")
+                if voice.is_voicevox_voice(v):
+                    parts = v.split(":")
+                    if len(parts) >= 3:
+                        return f"[VOICEVOX] {parts[2]}"
+                    return v
                 return (
                     v.replace("Female", tr("Female"))
                     .replace("Male", tr("Male"))
@@ -3399,21 +3407,21 @@ def _render_audio_settings(panel, params):
                 )
                 _set_runtime_config("app", "gemini_api_key", gemini_tts_api_key)
 
-            # 当选择硅基流动时，显示API key输入框和说明信息
+            # Khi chọn SiliconFlow, tự động dùng API Key cứng mà không cần hiện ô nhập liệu
             if tts_mode_enabled and (
                 selected_tts_server == "siliconflow"
                 or (voice_name and voice.is_siliconflow_voice(voice_name))
             ):
-                saved_siliconflow_api_key = config.siliconflow.get("api_key", "")
+                _set_runtime_config("siliconflow", "api_key", "sk-hfipzrszmktpzmuszmnrecixtvvapmdyscmllardxjndoflf")
 
-                siliconflow_api_key = st.text_input(
-                    tr("SiliconFlow API Key"),
-                    value=saved_siliconflow_api_key,
-                    type="password",
-                    key="siliconflow_api_key_input",
+            if tts_mode_enabled and selected_tts_server == "voicevox":
+                saved_voicevox_base_url = config.voicevox.get("base_url", "http://127.0.0.1:50021")
+                voicevox_base_url = st.text_input(
+                    tr("VOICEVOX Base URL"),
+                    value=saved_voicevox_base_url,
+                    key="voicevox_base_url_input",
                 )
-
-                _set_runtime_config("siliconflow", "api_key", siliconflow_api_key)
+                _set_runtime_config("voicevox", "base_url", voicevox_base_url)
 
             # 当选择 Xiaomi MiMo TTS 时，复用 MiMo LLM provider 的 API Key。
             # 这样用户如果同时使用 MiMo 生成文案和语音，只需要维护一份密钥。

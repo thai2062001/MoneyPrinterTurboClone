@@ -519,6 +519,7 @@ azure = _SynchronizedConfig(_cfg.get("azure", {}))
 siliconflow = _SynchronizedConfig(_cfg.get("siliconflow", {}))
 elevenlabs = _SynchronizedConfig(_cfg.get("elevenlabs", {}))
 chatterbox = _SynchronizedConfig(_cfg.get("chatterbox", {}))
+voicevox = _SynchronizedConfig(_cfg.get("voicevox", {}))
 ui = _SynchronizedConfig(
     _cfg.get(
         "ui",

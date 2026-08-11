@@ -115,6 +115,45 @@ def get_gemini_voices() -> list[str]:
     ]
 
 
+def is_voicevox_voice(voice_name: str) -> bool:
+    return voice_name.startswith("voicevox:")
+
+
+def get_voicevox_voices() -> list[str]:
+    """
+    Quét động danh sách giọng đọc từ VOICEVOX API local, hoặc trả về danh sách mặc định nếu offline.
+    """
+    base_url = config.voicevox.get("base_url", "http://127.0.0.1:50021").rstrip('/')
+    try:
+        response = requests.get(f"{base_url}/speakers", timeout=1.0)
+        if response.status_code == 200:
+            speakers = response.json()
+            voices = []
+            for speaker in speakers:
+                name = speaker.get("name")
+                for style in speaker.get("styles", []):
+                    style_name = style.get("name")
+                    style_id = style.get("id")
+                    voices.append(f"voicevox:{style_id}:{name}-{style_name}")
+            if voices:
+                return voices
+    except Exception:
+        pass
+    
+    # Fallback if VOICEVOX is not running
+    return [
+        "voicevox:3:Zundamon-Normal",
+        "voicevox:1:Shikoku Metan-Normal",
+        "voicevox:2:Shikoku Metan-Sweet",
+        "voicevox:8:Kasukabe Tsumugi-Normal",
+        "voicevox:9:Namine Ritsu-Normal",
+        "voicevox:10:Rain-Normal",
+        "voicevox:14:Meiba-Normal",
+        "voicevox:16:Kyushu Sora-Normal",
+        "voicevox:20:Mochizuki Himari-Normal",
+    ]
+
+
 def get_mimo_voices() -> list[str]:
     """
     获取 Xiaomi MiMo V2.5 TTS 的预置音色列表。
@@ -442,6 +481,21 @@ def tts(
             )
         else:
             logger.error(f"Invalid chatterbox voice name format: {voice_name}")
+            return None
+    elif is_voicevox_voice(voice_name):
+        # 格式: voicevox:speaker_id:name-style
+        parts = voice_name.split(":")
+        if len(parts) >= 2:
+            speaker_id = int(parts[1])
+            return voicevox_tts(
+                text=text,
+                speaker_id=speaker_id,
+                voice_file=voice_file,
+                voice_rate=voice_rate,
+                voice_volume=voice_volume,
+            )
+        else:
+            logger.error(f"Invalid voicevox voice name format: {voice_name}")
             return None
     return azure_tts_v1(text, voice_name, voice_rate, voice_file)
 
@@ -917,6 +971,123 @@ def siliconflow_tts(
             logger.error(f"siliconflow tts failed: {str(e)}")
 
     return None
+
+
+def voicevox_tts(
+    text: str,
+    speaker_id: int,
+    voice_file: str,
+    voice_rate: float,
+    voice_volume: float = 1.0,
+) -> Union[SubMaker, None]:
+    """
+    Sử dụng API VOICEVOX local để tạo âm thanh cho video.
+    """
+    text = text.strip()
+    base_url = config.voicevox.get("base_url", "http://127.0.0.1:50021").rstrip('/')
+
+    try:
+        # Step 1: Create audio query
+        query_url = f"{base_url}/audio_query"
+        params = {"text": text, "speaker": speaker_id}
+        response = requests.post(query_url, params=params, timeout=30)
+        if response.status_code != 200:
+            logger.error(f"VOICEVOX audio_query failed: {response.text}")
+            return None
+
+        query_data = response.json()
+
+        # Step 2: Apply speed (voice_rate) and volume (voice_volume)
+        # VOICEVOX speedScale ranges from 0.5 to 2.0
+        # volumeScale ranges from 0.0 to 2.0
+        query_data["speedScale"] = max(0.5, min(2.0, voice_rate))
+        query_data["volumeScale"] = max(0.0, min(2.0, voice_volume))
+
+        # Step 3: Synthesis
+        synthesis_url = f"{base_url}/synthesis"
+        synthesis_params = {"speaker": speaker_id}
+        headers = {"Content-Type": "application/json"}
+        synth_response = requests.post(
+            synthesis_url,
+            params=synthesis_params,
+            json=query_data,
+            headers=headers,
+            timeout=60
+        )
+        if synth_response.status_code != 200:
+            logger.error(f"VOICEVOX synthesis failed: {synth_response.text}")
+            return None
+
+        # Save output audio (VOICEVOX returns WAV)
+        temp_wav_file = voice_file + ".wav"
+        with open(temp_wav_file, "wb") as f:
+            f.write(synth_response.content)
+
+        ffmpeg_binary = utils.get_ffmpeg_binary()
+        if ffmpeg_binary and os.path.exists(temp_wav_file):
+            cmd = [
+                ffmpeg_binary,
+                "-y",
+                "-i",
+                temp_wav_file,
+                "-codec:a",
+                "libmp3lame",
+                "-q:a",
+                "4",
+                voice_file,
+            ]
+            subprocess.run(cmd, capture_output=True, check=False)
+            try:
+                os.remove(temp_wav_file)
+            except Exception:
+                pass
+        else:
+            if os.path.exists(temp_wav_file):
+                if os.path.exists(voice_file):
+                    os.remove(voice_file)
+                os.rename(temp_wav_file, voice_file)
+
+        # Create SubMaker subtitles
+        sub_maker = ensure_legacy_submaker_fields(SubMaker())
+        try:
+            from moviepy import AudioFileClip
+            audio_clip = AudioFileClip(voice_file)
+            audio_duration = audio_clip.duration
+            audio_clip.close()
+
+            audio_duration_100ns = int(audio_duration * 10000000)
+
+            # Segment the text and compute timestamps linearly
+            sentences = utils.split_string_by_punctuations(text)
+            if sentences:
+                total_chars = sum(len(s) for s in sentences)
+                char_duration = (
+                    audio_duration_100ns / total_chars if total_chars > 0 else 0
+                )
+                current_offset = 0
+                for sentence in sentences:
+                    if not sentence.strip():
+                        continue
+                    sentence_chars = len(sentence)
+                    sentence_duration = int(sentence_chars * char_duration)
+                    sub_maker.subs.append(sentence)
+                    sub_maker.offset.append(
+                        (current_offset, current_offset + sentence_duration)
+                    )
+                    current_offset += sentence_duration
+            else:
+                sub_maker.subs = [text]
+                sub_maker.offset = [(0, audio_duration_100ns)]
+        except Exception as e:
+            logger.warning(f"Failed to create accurate voicevox subtitles: {str(e)}")
+            sub_maker.subs = [text]
+            sub_maker.offset = [(0, 10000000)]
+
+        logger.success(f"voicevox tts succeeded: {voice_file}")
+        return sub_maker
+    except Exception as e:
+        logger.error(f"voicevox tts failed: {str(e)}")
+        return None
 
 
 def _build_azure_v2_ssml(text: str, voice_name: str, voice_rate: float) -> str:
