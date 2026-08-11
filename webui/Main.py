@@ -2394,6 +2394,25 @@ def _render_video_settings(panel, params):
             )
             _set_runtime_config("app", "video_source", params.video_source)
 
+            if params.video_source == "pollinations":
+                ai_image_styles = [
+                    (tr("Anime Style"), "anime"),
+                    (tr("Realism Style"), "realism"),
+                    (tr("Cinematic Style"), "cinematic"),
+                    (tr("3D Pixar Style"), "pixar"),
+                ]
+                saved_style = config.ui.get("ai_image_style", "anime")
+                selected_style = stable_selectbox(
+                    tr("AI Image Style"),
+                    options=[v for _, v in ai_image_styles],
+                    default_value=saved_style,
+                    key="ai_image_style_select",
+                    format_func=lambda value: dict(
+                        (v, label) for label, v in ai_image_styles
+                    )[value],
+                )
+                _set_runtime_config("ui", "ai_image_style", selected_style)
+
             if params.video_source == "local":
                 # Streamlit 的文件类型校验对扩展名大小写敏感，这里同时放行大小写两种形式。
                 local_file_types = sorted(

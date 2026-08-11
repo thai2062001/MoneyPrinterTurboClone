@@ -613,10 +613,21 @@ def search_videos_pollinations(
     else:
         width, height = 1024, 1024
 
+    ai_image_style = config.ui.get("ai_image_style", "anime")
+    prompt_modifiers = {
+        "anime": ", highly detailed anime style illustration, masterpiece, vibrant colors, 4k",
+        "realism": ", photorealistic, highly detailed, realistic texture, 8k resolution, professional photography",
+        "cinematic": ", cinematic scene style, dramatic studio lighting, depth of field, movie still, 8k",
+        "pixar": ", 3d cartoon pixar style illustration, cute, vibrant, 3d render, blender, highly detailed"
+    }
+    modifier = prompt_modifiers.get(ai_image_style, prompt_modifiers["anime"])
+    enhanced_prompt = search_term.strip() + modifier
+
     seed = random.randint(1, 1000000)
-    encoded_term = quote_plus(search_term.strip())
+    encoded_term = quote_plus(enhanced_prompt)
     
-    image_url = f"https://image.pollinations.ai/p/{encoded_term}?width={width}&height={height}&nologo=true&seed={seed}"
+    # Ép buộc sử dụng mô hình FLUX của Pollinations AI để cho chất lượng ảnh tốt nhất
+    image_url = f"https://image.pollinations.ai/p/{encoded_term}?width={width}&height={height}&nologo=true&seed={seed}&model=flux"
     
     item = MaterialInfo()
     item.provider = "pollinations"
