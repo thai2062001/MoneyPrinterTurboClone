@@ -2376,6 +2376,7 @@ def _render_video_settings(panel, params):
                 (tr("Pexels"), "pexels"),
                 (tr("Pixabay"), "pixabay"),
                 (tr("Coverr"), "coverr"),
+                (tr("AI Generated (Pollinations)"), "pollinations"),
                 (tr("Local file"), "local"),
             ]
 
@@ -3878,7 +3879,7 @@ def _render_generation_controls(
             st.error(tr("Video Script and Subject Cannot Both Be Empty"))
             st.stop()
 
-        if params.video_source not in ["pexels", "pixabay", "coverr", "local"]:
+        if params.video_source not in ["pexels", "pixabay", "coverr", "pollinations", "local"]:
             _remove_active_generation_task(task_id)
             st.error(tr("Please Select a Valid Video Source"))
             st.stop()

@@ -600,7 +600,126 @@ def search_videos_coverr(
             f"error={type(e).__name__}, detail={_redact_request_error(e, api_key)}"
         )
 
-    return []
+def search_videos_pollinations(
+    search_term: str,
+    minimum_duration: int,
+    video_aspect: VideoAspect,
+) -> List[MaterialInfo]:
+    aspect = VideoAspect(video_aspect)
+    if aspect == VideoAspect.portrait:
+        width, height = 720, 1280
+    elif aspect == VideoAspect.landscape:
+        width, height = 1280, 720
+    else:
+        width, height = 1024, 1024
+
+    seed = random.randint(1, 1000000)
+    encoded_term = quote_plus(search_term.strip())
+    
+    image_url = f"https://image.pollinations.ai/p/{encoded_term}?width={width}&height={height}&nologo=true&seed={seed}"
+    
+    item = MaterialInfo()
+    item.provider = "pollinations"
+    item.url = image_url
+    item.duration = minimum_duration
+    item.source_info = {
+        "provider": "pollinations",
+        "search_term": search_term,
+        "asset_id": f"pollinations-{seed}",
+        "source_page": "https://pollinations.ai",
+        "creator": {"name": "Pollinations AI"},
+        "rendition": {
+            "id": "pollinations_gen",
+            "width": width,
+            "height": height,
+        },
+    }
+    return [item]
+
+
+def save_image_as_video(image_url: str, save_dir: str = "", duration: int = 5) -> str:
+    if not save_dir:
+        save_dir = utils.storage_dir("cache_videos")
+
+    if not os.path.exists(save_dir):
+        os.makedirs(save_dir)
+
+    url_without_query = image_url.split("?")[0]
+    url_hash = utils.md5(url_without_query)
+    image_id = f"img-{url_hash}"
+    image_path = os.path.join(save_dir, f"{image_id}.jpg")
+    video_path = os.path.join(save_dir, f"{image_id}.mp4")
+
+    if os.path.exists(video_path) and os.path.getsize(video_path) > 0:
+        logger.info(f"video already exists for image: {video_path}")
+        return video_path
+
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
+    }
+
+    logger.info(f"downloading image from pollinations: {image_url}")
+    try:
+        response = requests.get(
+            image_url,
+            headers=headers,
+            proxies=config.proxy,
+            verify=_get_tls_verify(),
+            timeout=(60, 240),
+        )
+        if response.status_code == 200:
+            with open(image_path, "wb") as f:
+                f.write(response.content)
+        else:
+            logger.error(f"failed to download image, status code: {response.status_code}")
+            return ""
+    except Exception as e:
+        logger.error(f"failed to download image: {str(e)}")
+        return ""
+
+    if os.path.exists(image_path) and os.path.getsize(image_path) > 0:
+        from moviepy import ImageClip, CompositeVideoClip
+        clip = None
+        final_clip = None
+        try:
+            clip = (
+                ImageClip(image_path)
+                .with_duration(duration)
+                .with_position("center")
+            )
+            zoom_clip = clip.resized(
+                lambda t: 1 + (duration * 0.03) * (t / clip.duration)
+            )
+            final_clip = CompositeVideoClip([zoom_clip])
+            final_clip.write_videofile(video_path, fps=30, logger=None)
+            logger.success(f"image converted to video: {video_path}")
+            
+            # Clean up the downloaded image file to save space
+            try:
+                os.remove(image_path)
+            except Exception:
+                pass
+                
+            return video_path
+        except Exception as e:
+            logger.error(f"failed to convert image to video: {str(e)}")
+            if os.path.exists(video_path):
+                try:
+                    os.remove(video_path)
+                except Exception:
+                    pass
+        finally:
+            if clip is not None:
+                try:
+                    clip.close()
+                except Exception:
+                    pass
+            if final_clip is not None:
+                try:
+                    final_clip.close()
+                except Exception:
+                    pass
+    return ""
 
 
 def save_video(video_url: str, save_dir: str = "") -> str:
@@ -774,6 +893,9 @@ def download_videos(
     elif source == "coverr":
         provider = "coverr"
         remote_search_videos = search_videos_coverr
+    elif source == "pollinations":
+        provider = "pollinations"
+        remote_search_videos = search_videos_pollinations
 
     def search_videos(
         search_term: str,
@@ -840,9 +962,14 @@ def download_videos(
                 f"downloading {item.provider} video: "
                 f"asset_id={source_info.get('asset_id') or 'unknown'}"
             )
-            saved_video_path = save_video(
-                video_url=item.url, save_dir=material_directory
-            )
+            if item.provider == "pollinations":
+                saved_video_path = save_image_as_video(
+                    image_url=item.url, save_dir=material_directory, duration=max_clip_duration
+                )
+            else:
+                saved_video_path = save_video(
+                    video_url=item.url, save_dir=material_directory
+                )
             if saved_video_path:
                 logger.info(f"video saved: {saved_video_path}")
                 video_paths.append(saved_video_path)
@@ -943,9 +1070,14 @@ def _download_videos_by_script_order(
                     f"downloading ordered {item.provider} video for {search_term!r}: "
                     f"asset_id={source_info.get('asset_id') or 'unknown'}"
                 )
-                saved_video_path = save_video(
-                    video_url=item.url, save_dir=material_directory
-                )
+                if item.provider == "pollinations":
+                    saved_video_path = save_image_as_video(
+                        image_url=item.url, save_dir=material_directory, duration=max_clip_duration
+                    )
+                else:
+                    saved_video_path = save_video(
+                        video_url=item.url, save_dir=material_directory
+                    )
                 if saved_video_path:
                     logger.info(f"video saved: {saved_video_path}")
                     video_paths.append(saved_video_path)
