@@ -20,6 +20,7 @@ from app.services import (
     llm,
     material,
     sonilo,
+    storyboard,
     subtitle,
     task_artifacts,
     twelvelabs,
@@ -712,6 +713,217 @@ def generate_final_videos(
     return final_video_paths, combined_video_paths, warnings
 
 
+def _run_storyboard_pipeline(task_id, params: VideoParams, stop_at: str = "video"):
+    """
+    Storyboard 分镜的完整流水线：逐镜 TTS -> 拼音频 -> 手写字幕偏移 ->
+    分镜图片按真实配音时长转视频片段 -> ffmpeg 无损拼接 -> 最终合成。
+
+    只产出 1 个成片：素材是用户手动精挑的，多份随机变体没有意义，因此这里
+    不读 params.video_count。
+    """
+    scenes = [
+        scene
+        for scene in (params.storyboard_scenes or [])
+        if (scene.dialogue or "").strip()
+    ]
+    if not scenes:
+        return _mark_task_failed(
+            task_id, "script", "storyboard has no scenes with dialogue"
+        )
+
+    video_script = "\n".join(scene.dialogue.strip() for scene in scenes)
+    save_script_data(task_id, video_script, "", params)
+
+    if stop_at == "script":
+        sm.state.update_task(
+            task_id, state=const.TASK_STATE_COMPLETE, progress=100, script=video_script
+        )
+        return {"script": video_script}
+
+    sm.state.update_task(task_id, state=const.TASK_STATE_PROCESSING, progress=15)
+
+    scene_infos, audio_files = storyboard.synthesize_scene_audio(
+        task_id, params, scenes
+    )
+    if not scene_infos:
+        return _mark_task_failed(
+            task_id, "audio", "failed to synthesize narration for storyboard scenes"
+        )
+
+    task_dir = utils.task_dir(task_id)
+    audio_file = path.join(task_dir, "storyboard-audio.mp3")
+    if not storyboard.concat_audio_files(audio_files, audio_file):
+        return _mark_task_failed(
+            task_id, "audio", "failed to combine storyboard narration audio"
+        )
+    audio_duration = sum(info["duration"] for info in scene_infos)
+
+    sm.state.update_task(task_id, state=const.TASK_STATE_PROCESSING, progress=30)
+
+    if stop_at == "audio":
+        sm.state.update_task(
+            task_id,
+            state=const.TASK_STATE_COMPLETE,
+            progress=100,
+            audio_file=audio_file,
+        )
+        return {"audio_file": audio_file, "audio_duration": audio_duration}
+
+    subtitle_path = ""
+    if params.subtitle_enabled:
+        subtitle_path = storyboard.build_subtitle_file(
+            scene_infos, path.join(task_dir, "storyboard-subtitle.srt")
+        )
+
+    if stop_at == "subtitle":
+        sm.state.update_task(
+            task_id,
+            state=const.TASK_STATE_COMPLETE,
+            progress=100,
+            subtitle_path=subtitle_path,
+        )
+        return {"subtitle_path": subtitle_path}
+
+    sm.state.update_task(task_id, state=const.TASK_STATE_PROCESSING, progress=40)
+
+    clip_paths = storyboard.build_scene_video_clips(task_id, scene_infos, params)
+    if not clip_paths:
+        return _mark_task_failed(
+            task_id, "materials", "failed to prepare storyboard scene video clips"
+        )
+
+    if stop_at == "materials":
+        sm.state.update_task(
+            task_id,
+            state=const.TASK_STATE_COMPLETE,
+            progress=100,
+            materials=clip_paths,
+        )
+        return {"materials": clip_paths}
+
+    sm.state.update_task(task_id, state=const.TASK_STATE_PROCESSING, progress=55)
+
+    combined_video_path = path.join(task_dir, "combined-1.mp4")
+    if not storyboard.combine_storyboard_clips(
+        task_id, clip_paths, params.n_threads, combined_video_path
+    ):
+        return _mark_task_failed(
+            task_id, "video", "failed to combine storyboard video clips"
+        )
+
+    sm.state.update_task(task_id, progress=70)
+
+    video_music_provider = _VIDEO_MUSIC_PROVIDERS.get(params.bgm_type)
+    video_music_requested = (
+        video_music_provider is not None
+        and bgm_service.should_use_bgm(params.bgm_type, params.bgm_volume)
+    )
+    bgm_file_override = "" if video_music_provider else None
+    generation_warnings = []
+    if video_music_requested:
+        service = video_music_provider["service"]
+        display_name = video_music_provider["display_name"]
+        warning_code = video_music_provider["warning_code"]
+        generated_bgm_path = path.join(
+            task_dir, f"{params.bgm_type}-bgm-1{video_music_provider['suffix']}"
+        )
+        try:
+            service.generate_bgm(
+                video_path=combined_video_path,
+                output_path=generated_bgm_path,
+                video_duration=audio_duration,
+                prompt=_get_video_music_prompt(params),
+            )
+            bgm_file_override = generated_bgm_path
+        except video_music_provider["error_type"] as exc:
+            logger.warning(
+                f"{display_name} BGM generation failed for storyboard: "
+                f"task_id={task_id}, error={exc}"
+            )
+            bgm_file_override = ""
+            generation_warnings.append({"code": warning_code, "video_index": 1})
+
+    final_video_path = path.join(task_dir, "final-1.mp4")
+    bgm_mix_succeeded = video.generate_video(
+        video_path=combined_video_path,
+        audio_path=audio_file,
+        subtitle_path=subtitle_path,
+        output_file=final_video_path,
+        params=params,
+        bgm_file_override=bgm_file_override,
+    )
+    if (
+        video_music_provider is not None
+        and bgm_file_override
+        and not bgm_mix_succeeded
+    ):
+        generation_warnings.append(
+            {"code": video_music_provider["warning_code"], "video_index": 1}
+        )
+
+    if not (
+        os.path.exists(final_video_path) and os.path.getsize(final_video_path) > 0
+    ):
+        return _mark_task_failed(
+            task_id, "video", "failed to generate final storyboard video"
+        )
+
+    final_video_paths = [final_video_path]
+    combined_video_paths = [combined_video_path]
+    logger.success(f"storyboard task {task_id} finished, generated 1 video.")
+
+    cross_post_enabled = (
+        upload_post.upload_post_service.is_configured()
+        and upload_post.upload_post_service.auto_upload
+    )
+    platforms = (
+        list(upload_post.upload_post_service.platforms) if cross_post_enabled else []
+    )
+    should_cross_post = cross_post_enabled and bool(platforms)
+    if cross_post_enabled and not platforms:
+        logger.warning(
+            f"skip cross-post because no platforms are configured, task_id: {task_id}"
+        )
+    cross_post_state = const.CROSS_POST_STATE_PENDING if should_cross_post else None
+
+    kwargs = {
+        "videos": final_video_paths,
+        "combined_videos": combined_video_paths,
+        "script": video_script,
+        "terms": "",
+        "audio_file": audio_file,
+        "audio_duration": audio_duration,
+        "subtitle_path": subtitle_path,
+        "materials": clip_paths,
+        "cross_post_state": cross_post_state,
+        "cross_post_results": None,
+        "cross_post_error": None,
+        "cross_post_owner": _cross_post_process_owner if should_cross_post else None,
+        "warnings": generation_warnings or None,
+    }
+    sm.state.update_task(
+        task_id, state=const.TASK_STATE_COMPLETE, progress=100, **kwargs
+    )
+
+    if should_cross_post:
+        scheduling_error = _schedule_cross_post(
+            task_id=task_id,
+            video_paths=final_video_paths,
+            params=params,
+            video_script=video_script,
+            platforms=platforms,
+            youtube_privacy_status=(
+                upload_post.upload_post_service.youtube_privacy_status
+            ),
+        )
+        if scheduling_error:
+            kwargs["cross_post_state"] = const.CROSS_POST_STATE_FAILED
+            kwargs["cross_post_error"] = scheduling_error
+            kwargs["cross_post_owner"] = None
+
+    return kwargs
+
+
 def _patch_cross_post_state(task_id: str, **kwargs) -> bool | None:
     """安全更新发布字段；短暂状态后端故障时有限重试。"""
     for attempt in range(1, _CROSS_POST_STATE_WRITE_ATTEMPTS + 1):
@@ -1087,6 +1299,11 @@ def _run_pipeline(
                 validate_access()
             except video_music_provider["error_type"] as exc:
                 return _mark_task_failed(task_id, "preflight", str(exc))
+
+    if params.video_source == "storyboard":
+        # Storyboard 分镜由用户手动挑图，完全绕开脚本生成/关键词搜索/自动配图
+        # 那一整套流水线，走独立的分镜合成路径。
+        return _run_storyboard_pipeline(task_id, params, stop_at)
 
     # 1. Generate script
     video_script = generate_script(task_id, params)

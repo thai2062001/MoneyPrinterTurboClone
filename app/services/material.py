@@ -12,7 +12,7 @@ from moviepy.video.io.VideoFileClip import VideoFileClip
 from app.config import config
 from app.models.schema import MaterialInfo, VideoAspect, VideoConcatMode
 from app.services import material_cache, task_artifacts
-from app.utils import utils
+from app.utils import file_security, utils
 
 # Thread-safe counter for API key rotation
 _api_key_counter = 0
@@ -688,49 +688,172 @@ def save_image_as_video(image_url: str, save_dir: str = "", duration: int = 5) -
         logger.error(f"failed to download image: {str(e)}")
         return ""
 
-    if os.path.exists(image_path) and os.path.getsize(image_path) > 0:
-        from moviepy import ImageClip, CompositeVideoClip
-        clip = None
-        final_clip = None
+    return _convert_image_file_to_video(image_path, video_path, duration)
+
+
+def _convert_image_file_to_video(
+    image_path: str,
+    video_path: str,
+    duration: int,
+    target_size: tuple[int, int] | None = None,
+) -> str:
+    """把本地图片文件转成带轻微 zoom-in 效果的视频片段。成功后删除源图片。
+
+    target_size 给定时，会按目标宽高比缩放并居中加黑边，和 combine_videos()
+    里处理尺寸不一素材的方式一致——storyboard 场景图片来自用户库，尺寸
+    各不相同，多段拼接前必须先统一到同一分辨率，否则 ffmpeg concat 会失败。
+    """
+    if not (os.path.exists(image_path) and os.path.getsize(image_path) > 0):
+        return ""
+
+    from moviepy import ColorClip, ImageClip, CompositeVideoClip
+
+    clip = None
+    final_clip = None
+    try:
+        clip = ImageClip(image_path).with_duration(duration).with_position("center")
+
+        if target_size is not None:
+            target_width, target_height = target_size
+            clip_w, clip_h = clip.size
+            if clip_w != target_width or clip_h != target_height:
+                clip_ratio = clip_w / clip_h
+                target_ratio = target_width / target_height
+                if clip_ratio == target_ratio:
+                    clip = clip.resized(new_size=(target_width, target_height))
+                else:
+                    if clip_ratio > target_ratio:
+                        scale_factor = target_width / clip_w
+                    else:
+                        scale_factor = target_height / clip_h
+                    new_width = int(clip_w * scale_factor)
+                    new_height = int(clip_h * scale_factor)
+                    background = ColorClip(
+                        size=(target_width, target_height), color=(0, 0, 0)
+                    ).with_duration(duration)
+                    resized = clip.resized(new_size=(new_width, new_height)).with_position(
+                        "center"
+                    )
+                    clip = CompositeVideoClip([background, resized]).with_duration(duration)
+
+        zoom_clip = clip.resized(
+            lambda t: 1 + (duration * 0.03) * (t / clip.duration)
+        )
+        final_clip = CompositeVideoClip([zoom_clip])
+        final_clip.write_videofile(video_path, fps=30, logger=None)
+        logger.success(f"image converted to video: {video_path}")
+
         try:
-            clip = (
-                ImageClip(image_path)
-                .with_duration(duration)
-                .with_position("center")
-            )
-            zoom_clip = clip.resized(
-                lambda t: 1 + (duration * 0.03) * (t / clip.duration)
-            )
-            final_clip = CompositeVideoClip([zoom_clip])
-            final_clip.write_videofile(video_path, fps=30, logger=None)
-            logger.success(f"image converted to video: {video_path}")
-            
-            # Clean up the downloaded image file to save space
+            os.remove(image_path)
+        except Exception:
+            pass
+
+        return video_path
+    except Exception as e:
+        logger.error(f"failed to convert image to video: {str(e)}")
+        if os.path.exists(video_path):
             try:
-                os.remove(image_path)
+                os.remove(video_path)
             except Exception:
                 pass
-                
-            return video_path
-        except Exception as e:
-            logger.error(f"failed to convert image to video: {str(e)}")
-            if os.path.exists(video_path):
-                try:
-                    os.remove(video_path)
-                except Exception:
-                    pass
-        finally:
-            if clip is not None:
-                try:
-                    clip.close()
-                except Exception:
-                    pass
-            if final_clip is not None:
-                try:
-                    final_clip.close()
-                except Exception:
-                    pass
-    return ""
+        return ""
+    finally:
+        if clip is not None:
+            try:
+                clip.close()
+            except Exception:
+                pass
+        if final_clip is not None:
+            try:
+                final_clip.close()
+            except Exception:
+                pass
+
+
+# =============================================================================
+# Storyboard image library
+#
+# 用户自己上传/存放图片到素材库目录，逐个分镜手动挑选，不做 AI 生图。
+# =============================================================================
+
+STORYBOARD_LIBRARY_DIR_NAME = "images"
+STORYBOARD_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
+
+
+def storyboard_library_dir() -> str:
+    return utils.storage_dir(STORYBOARD_LIBRARY_DIR_NAME, create=True)
+
+
+def list_storyboard_library_images() -> List[str]:
+    """按文件名排序返回素材库里的图片文件名（不含路径）。"""
+    library_dir = storyboard_library_dir()
+    filenames = [
+        entry.name
+        for entry in Path(library_dir).iterdir()
+        if entry.is_file() and entry.suffix.lower() in STORYBOARD_IMAGE_EXTENSIONS
+    ]
+    return sorted(filenames)
+
+
+def save_storyboard_library_image(filename: str, file_bytes: bytes) -> str:
+    """保存一张上传的图片到素材库，返回库内文件名（可能因去重而与原名不同）。"""
+    library_dir = storyboard_library_dir()
+    safe_name = os.path.basename(filename)
+    ext = Path(safe_name).suffix.lower()
+    if ext not in STORYBOARD_IMAGE_EXTENSIONS:
+        raise ValueError(f"unsupported image type: {ext}")
+
+    stem = Path(safe_name).stem or "image"
+    candidate = safe_name
+    counter = 1
+    while os.path.exists(os.path.join(library_dir, candidate)):
+        candidate = f"{stem}_{counter}{ext}"
+        counter += 1
+
+    target_path = os.path.join(library_dir, candidate)
+    with open(target_path, "wb") as f:
+        f.write(file_bytes)
+    return candidate
+
+
+def resolve_storyboard_library_image(filename: str) -> str:
+    """把库内文件名解析为真实路径，拒绝任何逃逸出素材库目录的路径。"""
+    return file_security.resolve_path_within_directory(
+        storyboard_library_dir(), filename
+    )
+
+
+def scene_image_to_video(
+    image_filename: str, save_dir: str, duration: int, video_aspect: VideoAspect
+) -> str:
+    """
+    把 storyboard 分镜里选中的库内图片转换成对应时长的视频片段。
+
+    库内图片来自用户自己上传，尺寸各不相同；这里统一缩放到 video_aspect
+    对应的分辨率（居中加黑边，不拉伸变形），否则多张不同尺寸的图片转出的
+    片段无法被 ffmpeg concat demuxer 正确拼接。
+    """
+    if not save_dir:
+        save_dir = utils.storage_dir("cache_videos")
+    if not os.path.exists(save_dir):
+        os.makedirs(save_dir)
+
+    target_size = VideoAspect(video_aspect).to_resolution()
+    source_path = resolve_storyboard_library_image(image_filename)
+    cache_key = utils.md5(f"{source_path}:{duration}:{target_size}")
+    video_id = f"storyboard-{cache_key}"
+    video_path = os.path.join(save_dir, f"{video_id}.mp4")
+    if os.path.exists(video_path) and os.path.getsize(video_path) > 0:
+        return video_path
+
+    # 转换函数成功后会删除传入的图片文件，这里用副本，避免把素材库的原图删掉。
+    import shutil
+
+    working_copy = os.path.join(save_dir, f"{video_id}{Path(source_path).suffix}")
+    shutil.copyfile(source_path, working_copy)
+    return _convert_image_file_to_video(
+        working_copy, video_path, duration, target_size=target_size
+    )
 
 
 def save_video(video_url: str, save_dir: str = "") -> str:

@@ -61,6 +61,22 @@ class MaterialInfo:
     source_info: Optional[dict[str, Any]] = None
 
 
+class StoryboardScene(BaseModel):
+    """
+    Storyboard 来源的一个手动分镜：图片由用户自己从素材库里选，不做 AI 生图。
+    duration 不由用户填写——最终时长取该分镜台词的 TTS 音频实际时长。
+    """
+
+    id: str = ""
+    setting: str = Field(default="", max_length=500)
+    location: str = Field(default="", max_length=500)
+    description: str = Field(default="", max_length=1000)
+    dialogue: str = Field(default="", max_length=2000)
+    # 相对 storyboard 素材库目录的文件名，写入任务文件前会重新校验，
+    # 避免路径穿越读取库目录之外的文件。
+    images: List[str] = Field(default_factory=list)
+
+
 class VideoParams(BaseModel):
     """
     {
@@ -91,7 +107,8 @@ class VideoParams(BaseModel):
     video_materials: Optional[List[MaterialInfo]] = (
         None  # Materials used to generate the video
     )
-    
+    storyboard_scenes: Optional[List[StoryboardScene]] = None
+
     custom_audio_file: Optional[str] = None  # Custom audio file path, will ignore TTS and can still use Whisper subtitles
     video_language: Optional[str] = ""  # auto detect
 

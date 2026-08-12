@@ -36,6 +36,7 @@ from app.models.llm_provider import (
 )
 from app.models.schema import (
     MaterialInfo,
+    StoryboardScene,
     VideoAspect,
     VideoConcatMode,
     VideoParams,
@@ -43,6 +44,7 @@ from app.models.schema import (
 )
 from app.services import bgm as bgm_service
 from app.services import cache_manager, llm, video, voice, webui_task
+from app.services import material as material_service
 from app.services import elevenlabs_music as elevenlabs_music_service
 from app.services import sonilo as sonilo_service
 from app.services import state as sm
@@ -2363,6 +2365,213 @@ def _render_script_settings(panel, params):
             )
 
 
+def _new_storyboard_scene() -> dict:
+    return {
+        "id": uuid4().hex[:8],
+        "setting": "",
+        "location": "",
+        "description": "",
+        "dialogue": "",
+        "images": [],
+    }
+
+
+@st.dialog(tr("Storyboard Image Library"), width="large")
+def _render_storyboard_library_dialog(scene_id: str):
+    """
+    图片素材库弹窗：批量上传图片到 storyboard_library 目录，并以多选网格
+    的形式把选中的图片分配给某一个分镜。图片本身不做任何 AI 处理。
+    """
+    uploaded = st.file_uploader(
+        tr("Upload Images to Library"),
+        type=["png", "jpg", "jpeg", "webp"],
+        accept_multiple_files=True,
+        key="storyboard_library_uploader",
+    )
+    if uploaded:
+        for uploaded_file in uploaded:
+            try:
+                material_service.save_storyboard_library_image(
+                    uploaded_file.name, uploaded_file.getvalue()
+                )
+            except ValueError:
+                st.warning(f"{tr('Unsupported Upload File Type')} ({uploaded_file.name})")
+        st.session_state.pop("storyboard_library_uploader", None)
+        st.rerun()
+
+    library_images = material_service.list_storyboard_library_images()
+    if not library_images:
+        st.info(tr("Storyboard Library Empty"))
+        return
+
+    scenes = st.session_state.get("storyboard_scenes", [])
+    scene = next((s for s in scenes if s["id"] == scene_id), None)
+    if scene is None:
+        return
+
+    selected_key = f"storyboard_library_selected_{scene_id}"
+    if selected_key not in st.session_state:
+        st.session_state[selected_key] = list(scene["images"])
+
+    st.caption(tr("Storyboard Library Select Help"))
+    columns_per_row = 4
+    for row_start in range(0, len(library_images), columns_per_row):
+        row_items = library_images[row_start : row_start + columns_per_row]
+        cols = st.columns(columns_per_row)
+        for col, filename in zip(cols, row_items):
+            with col:
+                image_path = material_service.resolve_storyboard_library_image(filename)
+                st.image(image_path, use_container_width=True)
+                checked = st.checkbox(
+                    filename,
+                    value=filename in st.session_state[selected_key],
+                    key=f"storyboard_lib_pick_{scene_id}_{filename}",
+                )
+                if checked and filename not in st.session_state[selected_key]:
+                    st.session_state[selected_key].append(filename)
+                elif not checked and filename in st.session_state[selected_key]:
+                    st.session_state[selected_key].remove(filename)
+
+    if st.button(
+        tr("Apply Selection"),
+        key=f"storyboard_apply_selection_{scene_id}",
+        type="primary",
+        use_container_width=True,
+    ):
+        scene["images"] = list(st.session_state[selected_key])
+        st.rerun()
+
+
+def _render_storyboard_import_json():
+    with st.expander(tr("Import Storyboard JSON")):
+        st.caption(tr("Storyboard JSON Import Help"))
+        json_text = st.text_area(
+            tr("Storyboard JSON"), key="storyboard_json_input", height=150
+        )
+        if st.button(tr("Import"), key="storyboard_json_import_button"):
+            try:
+                payload = json.loads(json_text)
+                raw_scenes = payload.get("scenes", payload) if isinstance(payload, dict) else payload
+                if not isinstance(raw_scenes, list):
+                    raise ValueError("scenes must be a list")
+                imported = []
+                for raw_scene in raw_scenes:
+                    scene = _new_storyboard_scene()
+                    scene["setting"] = str(raw_scene.get("setting", ""))
+                    scene["location"] = str(raw_scene.get("location", ""))
+                    scene["description"] = str(raw_scene.get("description", ""))
+                    scene["dialogue"] = str(raw_scene.get("dialogue", ""))
+                    images = raw_scene.get("images", [])
+                    scene["images"] = [str(name) for name in images] if isinstance(images, list) else []
+                    imported.append(scene)
+                if not imported:
+                    raise ValueError("empty scenes")
+                st.session_state["storyboard_scenes"] = imported
+                st.success(tr("Storyboard JSON Import Success"))
+                st.rerun()
+            except Exception as e:
+                st.error(f"{tr('Storyboard JSON Import Failed')}: {e}")
+
+
+def _render_storyboard_settings(params):
+    """
+    渲染 Storyboard 来源专属的"图像设置"卡片：逐分镜填写设定/台词，从图片库
+    里手动挑图。不做任何 AI 生图；每个分镜的实际时长由生成视频时该分镜台词
+    的 TTS 音频决定，这里不需要也不应该填时间轴。
+    """
+    with st.container(border=True):
+        st.write(tr("Image Settings"))
+        st.caption(tr("Storyboard Help"))
+
+        if "storyboard_scenes" not in st.session_state:
+            st.session_state["storyboard_scenes"] = [_new_storyboard_scene()]
+
+        _render_storyboard_import_json()
+
+        scenes = st.session_state["storyboard_scenes"]
+        for scene_index, scene in enumerate(scenes):
+            with st.container(border=True):
+                st.markdown(f"**{tr('Scene')} #{scene_index + 1}**")
+                col_a, col_b = st.columns(2)
+                with col_a:
+                    scene["setting"] = st.text_input(
+                        tr("Scene Setting"),
+                        value=scene["setting"],
+                        key=f"storyboard_setting_{scene['id']}",
+                    )
+                    scene["description"] = st.text_input(
+                        tr("Scene Description"),
+                        value=scene["description"],
+                        key=f"storyboard_description_{scene['id']}",
+                    )
+                with col_b:
+                    scene["location"] = st.text_input(
+                        tr("Scene Location"),
+                        value=scene["location"],
+                        key=f"storyboard_location_{scene['id']}",
+                    )
+                scene["dialogue"] = st.text_area(
+                    tr("Scene Dialogue"),
+                    value=scene["dialogue"],
+                    key=f"storyboard_dialogue_{scene['id']}",
+                    help=tr("Scene Dialogue Help"),
+                )
+
+                if scene["images"]:
+                    thumb_cols = st.columns(min(len(scene["images"]), 5))
+                    for thumb_col, filename in zip(thumb_cols, scene["images"]):
+                        with thumb_col:
+                            try:
+                                image_path = material_service.resolve_storyboard_library_image(
+                                    filename
+                                )
+                                st.image(image_path, use_container_width=True)
+                            except ValueError:
+                                st.warning(filename)
+                else:
+                    st.caption(tr("No Image Selected For Scene"))
+
+                button_cols = st.columns(2)
+                with button_cols[0]:
+                    if st.button(
+                        tr("Choose Images"),
+                        key=f"storyboard_choose_images_{scene['id']}",
+                        use_container_width=True,
+                        icon=":material/photo_library:",
+                    ):
+                        _render_storyboard_library_dialog(scene["id"])
+                with button_cols[1]:
+                    if len(scenes) > 1 and st.button(
+                        tr("Remove Scene"),
+                        key=f"storyboard_remove_scene_{scene['id']}",
+                        use_container_width=True,
+                        icon=":material/delete:",
+                    ):
+                        scenes.pop(scene_index)
+                        st.rerun()
+
+        if st.button(
+            tr("Add Scene"),
+            key="storyboard_add_scene",
+            use_container_width=True,
+            icon=":material/add:",
+        ):
+            scenes.append(_new_storyboard_scene())
+            st.rerun()
+
+        params.storyboard_scenes = [
+            StoryboardScene(
+                id=scene["id"],
+                setting=scene["setting"],
+                location=scene["location"],
+                description=scene["description"],
+                dialogue=scene["dialogue"],
+                images=scene["images"],
+            )
+            for scene in scenes
+        ]
+
+
 def _render_video_settings(panel, params):
     """渲染视频设置并返回本次选择的本地素材。"""
     uploaded_files = []
@@ -2378,6 +2587,7 @@ def _render_video_settings(panel, params):
                 (tr("Pixabay"), "pixabay"),
                 (tr("Coverr"), "coverr"),
                 (tr("AI Generated (Pollinations)"), "pollinations"),
+                (tr("Storyboard (Custom Images)"), "storyboard"),
                 (tr("Local file"), "local"),
             ]
 
@@ -2561,6 +2771,9 @@ def _render_video_settings(panel, params):
                 _delete_runtime_config("app", "video_codec")
             else:
                 _set_runtime_config("app", "video_codec", selected_video_codec)
+
+        if params.video_source == "storyboard":
+            _render_storyboard_settings(params)
     return uploaded_files
 
 
@@ -3902,15 +4115,49 @@ def _render_generation_controls(
             task_id,
             subject=params.video_subject or params.video_script or task_id,
         )
-        if not params.video_subject and not params.video_script:
+        # Storyboard 的台词分散在各个分镜里，不走整段 video_subject/video_script。
+        if (
+            params.video_source != "storyboard"
+            and not params.video_subject
+            and not params.video_script
+        ):
             _remove_active_generation_task(task_id)
             st.error(tr("Video Script and Subject Cannot Both Be Empty"))
             st.stop()
 
-        if params.video_source not in ["pexels", "pixabay", "coverr", "pollinations", "local"]:
+        if params.video_source not in [
+            "pexels",
+            "pixabay",
+            "coverr",
+            "pollinations",
+            "local",
+            "storyboard",
+        ]:
             _remove_active_generation_task(task_id)
             st.error(tr("Please Select a Valid Video Source"))
             st.stop()
+
+        if params.video_source == "storyboard":
+            storyboard_scenes = params.storyboard_scenes or []
+            scenes_with_dialogue = [
+                scene for scene in storyboard_scenes if (scene.dialogue or "").strip()
+            ]
+            if not scenes_with_dialogue:
+                _remove_active_generation_task(task_id)
+                st.error(tr("Please Add At Least One Storyboard Scene"))
+                st.stop()
+            missing_image_scenes = [
+                index + 1
+                for index, scene in enumerate(scenes_with_dialogue)
+                if not scene.images
+            ]
+            if missing_image_scenes:
+                _remove_active_generation_task(task_id)
+                st.error(
+                    f"{tr('Please Choose Images For Every Scene')}: "
+                    f"{', '.join(str(i) for i in missing_image_scenes)}"
+                )
+                st.stop()
 
         if params.video_source == "pexels" and not config.app.get(
             "pexels_api_keys", ""
