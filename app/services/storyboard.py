@@ -2,28 +2,26 @@
 Storyboard 来源的视频生成：图片完全由用户从素材库手动挑选，不做 AI 生图。
 
 流程：逐分镜台词单独跑 TTS 拿到真实音频时长 -> 按该时长把分镜图片转成视频
-片段 -> ffmpeg 无损拼接所有片段 -> pydub 拼接所有分镜音频 -> 按累计偏移量
+片段 -> ffmpeg 无损拼接所有片段 -> ffmpeg 拼接所有分镜音频 -> 按累计偏移量
 手写 SRT 字幕 -> 交给 video.generate_video 完成最终字幕烧录/配乐/编码。
 
 不复用 video.combine_videos，因为它会按 max_clip_duration 裁剪或循环素材，
 会破坏这里"每张图恰好显示它所在分镜的真实配音时长"的时间轴。
+
+音频拼接直接用 ffmpeg 的 concat demuxer，不用 pydub：pydub 的 from_file()
+默认会先跑一次 ffprobe 探测元数据（mediainfo_json），很多环境（包括这里）
+只打包了 ffmpeg 没有 ffprobe，会在拼接第一步就以 WinError 2 失败。
 """
 
 import os
+import subprocess
 from typing import Any, List
 
 from loguru import logger
-from pydub import AudioSegment
 
 from app.models.schema import StoryboardScene, VideoParams
 from app.services import material, video, voice
 from app.utils import utils
-
-
-def _configure_pydub_ffmpeg() -> None:
-    ffmpeg_bin = utils.get_ffmpeg_binary()
-    if ffmpeg_bin:
-        AudioSegment.converter = ffmpeg_bin
 
 
 def synthesize_scene_audio(
@@ -88,18 +86,48 @@ def synthesize_scene_audio(
 
 
 def concat_audio_files(audio_files: List[str], output_path: str) -> bool:
+    """用 ffmpeg concat demuxer 拼接分镜配音，按顺序无缝首尾相接。"""
     if not audio_files:
         return False
-    _configure_pydub_ffmpeg()
+
+    output_dir = os.path.dirname(output_path) or "."
+    concat_list_file = os.path.join(output_dir, "ffmpeg-audio-concat-list.txt")
     try:
-        combined = AudioSegment.empty()
-        for audio_file in audio_files:
-            combined += AudioSegment.from_file(audio_file)
-        combined.export(output_path, format="mp3")
+        with open(concat_list_file, "w", encoding="utf-8") as fp:
+            for audio_file in audio_files:
+                absolute_path = os.path.abspath(audio_file).replace("\\", "/")
+                escaped_path = absolute_path.replace("'", "'\\''")
+                fp.write(f"file '{escaped_path}'\n")
+
+        command = [
+            utils.get_ffmpeg_binary(),
+            "-y",
+            "-f",
+            "concat",
+            "-safe",
+            "0",
+            "-i",
+            concat_list_file,
+            # 不同分镜的配音可能来自不同 TTS 请求，逐段重新编码成统一参数，
+            # 避免 concat demuxer 在流复制模式下要求所有输入编码参数完全一致。
+            "-c:a",
+            "libmp3lame",
+            output_path,
+        ]
+        result = subprocess.run(command, capture_output=True, text=True, check=False)
+        if result.returncode != 0:
+            error_message = (result.stderr or result.stdout or "").strip()
+            logger.error(f"failed to concat storyboard narration audio: {error_message}")
+            return False
         return os.path.exists(output_path) and os.path.getsize(output_path) > 0
     except Exception as e:
         logger.error(f"failed to concat storyboard narration audio: {str(e)}")
         return False
+    finally:
+        try:
+            os.remove(concat_list_file)
+        except Exception:
+            pass
 
 
 def build_subtitle_file(scene_infos: List[dict[str, Any]], subtitle_path: str) -> str:

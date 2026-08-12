@@ -4,7 +4,8 @@
       "Bash(curl -sS -o /dev/null -w \"HTTP:%{http_code} TIME:%{time_total}\\\\n\" \"https://image.pollinations.ai/p/a%20red%20apple?width=512&height=512&nologo=true&seed=1&model=flux\" --max-time 60)",
       "Bash(python -c \"import google.genai as genai; print\\(genai.__file__\\)\")",
       "Bash(pip show *)",
-      "Bash(python -c ' *)"
+      "Bash(python -c ' *)",
+      "Bash(python -m py_compile app/services/storyboard.py)"
     ]
   }
 }
