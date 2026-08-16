@@ -4,57 +4,49 @@
       "setting": "Buổi sáng sớm bên ngoài hang đá thời tiền sử",
       "location": "Cửa hang, ven rừng",
       "description": "Cậu bé đeo kính cận, tay cầm cây giáo gỗ tự chế",
-      "dialogue": "Trước khi nông nghiệp ra đời, tổ tiên chúng ta sinh tồn chủ yếu nhờ săn bắt và hái lượm.",
-      "images": ["Boy_pointing_at_wooden_spear_202608121628.jpeg"]
+      "dialogue": "Trước khi nông nghiệp ra đời, tổ tiên chúng ta sinh tồn chủ yếu nhờ săn bắt và hái lượm."
     },
     {
       "setting": "Nhóm thợ săn chuẩn bị lên đường lúc chạng vạng",
       "location": "Bãi đất trống cạnh đống lửa trại",
       "description": "Nhiều người cầm đuốc cháy, không khí căng thẳng trước cuộc săn",
-      "dialogue": "Mỗi buổi đi săn đều bắt đầu bằng việc nhóm lửa và chuẩn bị vũ khí thật kỹ lưỡng.",
-      "images": ["Hunters_lighting_torches_at_fire_202608121628.jpeg"]
+      "dialogue": "Mỗi buổi đi săn đều bắt đầu bằng việc nhóm lửa và chuẩn bị vũ khí thật kỹ lưỡng."
     },
     {
       "setting": "Giữa đồng cỏ khô, ánh nắng gay gắt",
       "location": "Đồng cỏ savan",
       "description": "Người thợ săn dùng atlatl phóng lao với lực rất mạnh",
-      "dialogue": "Họ chế ra công cụ phóng lao atlatl, giúp mũi giáo bay xa và mạnh hơn gấp nhiều lần.",
-      "images": ["Person_throwing_spear_with_atlatl_202608121630.jpeg"]
+      "dialogue": "Họ chế ra công cụ phóng lao atlatl, giúp mũi giáo bay xa và mạnh hơn gấp nhiều lần."
     },
     {
       "setting": "Một đàn linh dương hoảng loạn chạy trốn",
       "location": "Thảo nguyên rộng lớn",
       "description": "Con mồi kiệt sức dưới cái nắng thiêu đốt sau khi bị truy đuổi",
-      "dialogue": "Có khi cả nhóm phải đuổi theo con mồi hàng giờ liền, cho đến khi nó kiệt sức gục ngã.",
-      "images": ["Antelope_panting_in_exhaustion_202608121629.jpeg"]
+      "dialogue": "Có khi cả nhóm phải đuổi theo con mồi hàng giờ liền, cho đến khi nó kiệt sức gục ngã."
     },
     {
       "setting": "Một con lợn rừng sa vào bẫy hố được nguỵ trang khéo léo",
       "location": "Ven rừng rậm",
       "description": "Chiếc bẫy hố tự chế, ngụy trang bằng cành lá",
-      "dialogue": "Không phải lúc nào cũng phải rượt đuổi — bẫy hố là một phát minh thông minh giúp tiết kiệm sức lực.",
-      "images": ["Boar_trapped_in_pit_trap_202608121629.jpeg"]
+      "dialogue": "Không phải lúc nào cũng phải rượt đuổi — bẫy hố là một phát minh thông minh giúp tiết kiệm sức lực."
     },
     {
       "setting": "Khu trại sau một ngày săn thành công",
       "location": "Bên ngoài hang đá",
       "description": "Vài người đang xử lý và phơi khô da thú",
-      "dialogue": "Sau khi săn được, họ không bỏ phí bất kỳ phần nào — kể cả da thú cũng được tận dụng làm quần áo, lều trại.",
-      "images": ["Figures_preparing_animal_hide_202608121629.jpeg"]
+      "dialogue": "Sau khi săn được, họ không bỏ phí bất kỳ phần nào — kể cả da thú cũng được tận dụng làm quần áo, lều trại."
     },
     {
       "setting": "Giàn hun khói dựng tạm bên đống lửa nhỏ",
       "location": "Góc trại, gần nơi trú ẩn",
       "description": "Thịt được xiên và hun khói để bảo quản lâu dài",
-      "dialogue": "Hun khói là bí quyết giúp họ giữ thịt được lâu hơn, không phải lo thiếu ăn trong những ngày săn không thành công.",
-      "images": ["Prehistoric_people_smoking_meat_…_202608121629.jpeg"]
+      "dialogue": "Hun khói là bí quyết giúp họ giữ thịt được lâu hơn, không phải lo thiếu ăn trong những ngày săn không thành công."
     },
     {
       "setting": "Bên trong hang động tối, ánh lửa bập bùng",
       "location": "Sâu trong hang đá",
       "description": "Cả nhóm quây quần ngắm nhìn những bức vẽ trên vách hang",
-      "dialogue": "Và chính từ cuộc sống săn bắt hái lượm ấy, những bức tranh hang động đầu tiên của loài người đã ra đời.",
-      "images": ["Clan_members_looking_at_painting_202608121631.jpeg"]
+      "dialogue": "Và chính từ cuộc sống săn bắt hái lượm ấy, những bức tranh hang động đầu tiên của loài người đã ra đời."
     }
   ]
 }

@@ -1248,17 +1248,9 @@ def _render_top_bar():
 
 
 support_locales = [
-    "zh-CN",
-    "zh-HK",
-    "zh-TW",
-    "de-DE",
+    "ja-JP",
     "en-US",
-    "es-ES",
-    "fr-FR",
-    "ru-RU",
     "vi-VN",
-    "th-TH",
-    "tr-TR",
 ]
 
 
@@ -3525,7 +3517,7 @@ def _render_audio_settings(panel, params):
                 filtered_voices = voice.get_voicevox_voices()
             else:
                 # 获取Azure的声音列表
-                all_voices = voice.get_all_azure_voices(filter_locals=None)
+                all_voices = voice.get_all_azure_voices(filter_locals=["ja-JP", "en-US", "vi-VN"])
 
                 # 根据选择的TTS服务器筛选声音
                 for v in all_voices:
